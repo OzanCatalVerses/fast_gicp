@@ -91,9 +91,7 @@ Eigen::Matrix4d align_points(
     voxelgrid.filter(*filtered);
     source_cloud.swap(filtered);
   }
-
   std::shared_ptr<fast_gicp::LsqRegistration<pcl::PointXYZ, pcl::PointXYZ>> reg;
-
   if(method == "GICP") {
     std::shared_ptr<fast_gicp::FastGICP<pcl::PointXYZ, pcl::PointXYZ>> gicp(new fast_gicp::FastGICP<pcl::PointXYZ, pcl::PointXYZ>);
     gicp->setMaxCorrespondenceDistance(max_correspondence_distance);
@@ -132,15 +130,13 @@ Eigen::Matrix4d align_points(
     std::cerr << "error: unknown registration method " << method << std::endl;
     return Eigen::Matrix4d::Identity();
   }
-
   reg->setInputTarget(target_cloud);
   reg->setInputSource(source_cloud);
-
   pcl::PointCloud<pcl::PointXYZ>::Ptr aligned(new pcl::PointCloud<pcl::PointXYZ>);
   reg->align(*aligned, initial_guess);
-
   return reg->getFinalTransformation().cast<double>();
 }
+
 
 using LsqRegistration = fast_gicp::LsqRegistration<pcl::PointXYZ, pcl::PointXYZ>;
 using FastGICP = fast_gicp::FastGICP<pcl::PointXYZ, pcl::PointXYZ>;
@@ -184,31 +180,53 @@ PYBIND11_MODULE(pygicp, m) {
   ;
   py::class_<FastGICP, LsqRegistration, std::shared_ptr<FastGICP>>(m, "FastGICP")
     .def(py::init())
+    .def(py::pickle(
+        [](const FastGICP &p) { // __getstate__
+            /* Return a tuple that fully encodes the state of the object */
+            return py::make_tuple(p.getSourceRotationsq());
+        },
+        [](py::tuple t) { // __setstate__
+            if (t.size() != 1)
+                throw std::runtime_error("Invalid state!");
+
+            /* Create a new C++ instance */
+            // FastGICP p(t[0].cast<std::string>());
+            FastGICP p;
+
+            /* Assign any additional state */
+            // p.setExtra(t[1].cast<int>());
+
+            return p;
+        }
+    ))
     .def("set_num_threads", &FastGICP::setNumThreads)
     .def("set_correspondence_randomness", &FastGICP::setCorrespondenceRandomness)
     .def("set_max_correspondence_distance", &FastGICP::setMaxCorrespondenceDistance)
+    .def("set_max_knn_distance", &FastGICP::setKNNMaxDistance)
     .def("get_source_rotationsq", [] (FastGICP& gicp){
-      return py::array(4*gicp.getSourceSize(), gicp.getSourceRotationsq().data());
+      return py::array(gicp.getSourceRotationsqSize(), gicp.getSourceRotationsq().data());
       // std::vector<Eigen::Vector4d, Eigen::aligned_allocator<Eigen::Vector4d>> source_rotationsq = gicp.getSourceRotationsq();
       // py::list data; for(const auto& q:source_rotationsq) data.append(q); return data;
       })
     .def("get_target_rotationsq", [] (FastGICP& gicp){
-      return py::array(4*gicp.getTargetSize(), gicp.getTargetRotationsq().data());
+      return py::array(gicp.getTargetRotationsqSize(), gicp.getTargetRotationsq().data());
       // std::vector<Eigen::Vector4d, Eigen::aligned_allocator<Eigen::Vector4d>> target_rotationsq = gicp.getTargetRotationsq();
       // py::list data; for(const auto& q:target_rotationsq) data.append(q); return data;
       })
     .def("get_source_scales", [] (FastGICP& gicp){
-      return py::array(3*gicp.getSourceSize(), gicp.getSourceScales().data());
+      return py::array(gicp.getSourceScaleSize(), gicp.getSourceScales().data());
       // std::vector<Eigen::Vector3d, Eigen::aligned_allocator<Eigen::Vector3d>> source_scales = gicp.getSourceScales();
       // py::list data; for(const auto& s:source_scales) data.append(s); return data;
       })
     .def("get_target_scales", [] (FastGICP& gicp){
-      return py::array(3*gicp.getTargetSize(), gicp.getTargetScales().data());
+      return py::array(gicp.getTargetScaleSize(), gicp.getTargetScales().data());
       // std::vector<Eigen::Vector3d, Eigen::aligned_allocator<Eigen::Vector3d>> target_scales = gicp.getTargetScales();
       // py::list data; for(const auto& s:target_scales) data.append(s); return data;
       })
     .def("calculate_source_covariance", &FastGICP::calculateSourceCovariance)
     .def("calculate_target_covariance", &FastGICP::calculateTargetCovariance)
+    .def("calculate_target_covariance_withz", &FastGICP::calculateTargetCovarianceWithZ)
+    .def("calculate_target_covariance_with_filter", &FastGICP::calculateTargetCovarianceWithFilter)
     .def("get_source_correspondence", [] (FastGICP& gicp){
     	return py::make_tuple(py::array(gicp.getSourceSize(), gicp.getSourceCorrespondences().data()), 
     				py::array(gicp.getSourceSize(), gicp.getSourceSqDistances().data()));
@@ -224,6 +242,22 @@ PYBIND11_MODULE(pygicp, m) {
     	const auto input_rotationsq = rotationsq.cast<std::vector<float>>();
     	const auto input_scales = scales.cast<std::vector<float>>();
     	gicp.setTargetCovariances(input_rotationsq, input_scales);
+    })
+    .def("set_source_z_values", [] (FastGICP& gicp, py::array z_values){
+      const auto input_z_values = z_values.cast<std::vector<float>>();
+    	gicp.setSourceZvalues(input_z_values);
+    })
+    .def("set_target_z_values", [] (FastGICP& gicp, py::array z_values){
+      const auto input_z_values = z_values.cast<std::vector<float>>();
+    	gicp.setTargetZvalues(input_z_values);
+    })
+    .def("set_source_filter", [] (FastGICP& gicp, py::int_ num_trackable, py::array filter){
+      const auto input_filter = filter.cast<std::vector<int>>();
+    	gicp.setSourceFilter(num_trackable, input_filter);
+    })
+    .def("set_target_filter", [] (FastGICP& gicp, py::int_ num_trackable, py::array filter){
+      const auto input_filter = filter.cast<std::vector<int>>();
+    	gicp.setTargetFilter(num_trackable, input_filter);
     })
   ;
 
